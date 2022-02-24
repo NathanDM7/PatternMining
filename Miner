@@ -1,0 +1,175 @@
+import json
+from pymongo import *
+import nltk
+
+
+def pattern_maker(arr):
+    patterns = []
+    for li in arr:
+        for i in range(len(li)):
+            temp = [li[i]]
+            for j in range(i + 1, len(li)):
+                temp.append(li[j])
+                temp.sort()
+                patterns.append([li[i], li[j]])
+                temp = [li[i]]
+    patterns = set(map(tuple, patterns))
+    patterns = map(list, patterns)
+    return list(patterns)
+
+
+def three_patterns(arr):
+    patterns = []
+    i = 0
+    for j in range(i + 1, len(arr)):
+        if arr[i][0] == arr[j][0]:
+            temp = [arr[i][0], arr[i][1], arr[j][1]]
+            temp.sort()
+            patterns.append(temp[:])
+        else:
+            i = j
+    return patterns
+
+
+def four_patterns(arr):
+    patterns = []
+    i = 0
+    for j in range(i + 1, len(arr)):
+        if arr[i][0] == arr[j][0] and arr[i][1] == arr[j][1]:
+            patterns.append([arr[i][0], arr[i][1], arr[i][2], arr[j][2]])
+        else:
+            i = j
+    return patterns
+
+
+client = MongoClient("mongodb://localhost:27017/")
+db = client["Project"]
+
+if 'Covid_Data' in db.list_collection_names():
+    db['Covid_Data'].drop()
+covid = db["Covid_Data"]
+
+with open('C:\\Users\\Natem\\Downloads\\project 3\\litcovid2BioCJSON_small.json') as file:
+    file_data = json.load(file)
+
+
+if isinstance(file_data, list):
+    covid.insert_many(file_data)
+else:
+    covid.insert_one(file_data)
+
+stop_words = set(nltk.corpus.stopwords.words('english'))
+items = []
+final_array = []
+
+# This cleans the text
+for n in covid.find({}):
+    for m in n['passages']:
+        temp_words = nltk.word_tokenize(m['text'])
+        temp_words = [w.lower() for w in temp_words]
+        for word in temp_words:
+            if word not in stop_words and word not in items and len(word) >= 2 and word.isalpha():
+                items.append(word)
+        items.sort()
+        final_array.append(items[:])
+        items = []
+
+# This creates an index we can use to count occurrences of words in our database
+index = {}
+num = 0
+for i in final_array:
+    for word in i:
+        if word in index:
+            index[word].append(num)
+        else:
+            index[word] = [num]
+    num += 1
+
+one_itemset = []
+remove = []
+for value in index:
+    if len(index[value]) >= 200:
+        one_itemset.append(value)
+    else:
+        remove.append(value)
+
+one_itemset.sort()
+
+num = 0
+while num < len(final_array):
+    n = 0
+    while n < len(final_array[num]):
+        if final_array[num][n] not in one_itemset:
+            final_array[num].remove(final_array[num][n])
+        else:
+            n += 1
+    num += 1
+
+# This generates and counts up occurrences of 2-itemsets
+two = {}
+for passage in final_array:
+    for word in passage:
+        for num in range(passage.index(word) + 1, len(passage)):
+            if (word, passage[num]) in two:
+                two[(word, passage[num])] += 1
+            else:
+                two[(word, passage[num])] = 1
+
+two_itemsets = []
+for value in two:
+    if two[value] >= 200:
+        two_itemsets.append(list(value))
+
+print("Top five most frequent 2-itemsets: ")
+top = [['', 0], ['', 0], ['', 0], ['', 0], ['', 0]]
+for value in two:
+    for g in range(len(top)):
+        if two[value] > top[g][1]:
+            for f in range(len(top) - 1, g, -1):
+                top[f] = top[f - 1]
+            top[g] = [value, two[value]]
+            break
+for value in top:
+    print(value[0], value[1])
+two_itemsets.sort()
+
+# This generates and counts the frequency of the 3-itemsets
+three_itemsets = three_patterns(two_itemsets)
+three = {}
+for triple in three_itemsets:
+    count = 0
+    for num in index[triple[0]]:
+        if num in index[triple[1]] and num in index[triple[2]]:
+            if tuple(triple) in three:
+                three[tuple(triple)] += 1
+            else:
+                three[tuple(triple)] = 1
+for t in three:
+    if three[t] <= 200:
+        three_itemsets.remove(list(t))
+
+# This generates and counts the 4-itemsets, from which we can see there are no frequent 4-itemsets
+four_itemsets = four_patterns(three_itemsets)
+four = {}
+for quad in four_itemsets:
+    count = 0
+    for num in index[quad[0]]:
+        if num in index[quad[1]] and num in index[quad[2]] and num in index[quad[3]]:
+            if tuple(quad) in four:
+                four[tuple(quad)] += 1
+            else:
+                four[tuple(quad)] = 1
+
+
+for q in four:
+    if four[q] <= 200:
+        four_itemsets.remove(list(q))
+
+for trip in three_itemsets:
+    if two[(trip[0], trip[1])] == three[tuple(trip)]:
+        two_itemsets.remove([trip[0], trip[1]])
+    elif two[(trip[1], trip[2])] == three[tuple(trip)]:
+        two_itemsets.remove([trip[1], trip[2]])
+    elif two[(trip[0], trip[2])] == three[tuple(trip)]:
+        two_itemsets.remove([trip[0], trip[2]])
+print('Number of closed itemsets: ', + len(one_itemset) + len(two_itemsets) + len(three_itemsets))
